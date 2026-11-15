@@ -97,24 +97,46 @@ menu.addEventListener('click', function (e) {
 /* ================= каталог ================= */
 var grid = $('#grid'), flt = $('#flt');
 function card(p) {
-  var cls = 'ph' + (p.kind === 'cut' ? ' cut' : '');
+  /* r1 В4: тёмная плитка для серебра в футляре (bg dark), bl-* — срез кадра к краю (CSS ещё не дописан); В6: в сетке превью 600 px */
+  var cls = 'ph' + (p.kind === 'cut' ? ' cut' : '') + (p.bg === 'dark' ? ' dk' : '') + (p.bl ? ' bl-' + p.bl : '');
+  var t = p.t || [p.img, p.w, p.h];
   return '<button class="card" type="button" data-id="' + esc(p.id) + '" data-cat="' + esc(p.cat) + '">' +
-    '<span class="' + cls + '">' +
-    '<img src="' + p.img + '" width="' + p.w + '" height="' + p.h + '" loading="lazy" decoding="async" alt="' + esc(p.name) + '"></span>' +
+    '<span class="' + cls + '"' + (p.bg === 'dark' ? ' style="background:#141414"' : '') + '>' +
+    '<img src="' + t[0] + '" width="' + t[1] + '" height="' + t[2] + '" loading="lazy" decoding="async" alt="' + esc(p.name) + '"></span>' +
     '<span class="nm">' + esc(p.name) + '</span><span class="pr">' + price(p.uah) + '</span>' +
     (p.sizes && p.sizes.length ? '<span class="sz">' + szs(p.sizes) + '</span>' : '') +
     /* r3 Б5: без плашки на фото; если архив включат (MORF_ASK=1) — обычным текстом под ценой */
     (p.st === 'ask' ? '<span class="sz">наличие уточнить</span>' : '') + '</button>';
 }
 grid.innerHTML = M.items.map(card).join('');
-flt.innerHTML = ['Все'].concat(M.cats).map(function (c, i) {
+/* r1 М9: фильтр с одной вещью не показываем — вещь остаётся во «Все» */
+var CN = {}; M.items.forEach(function (i) { CN[i.cat] = (CN[i.cat] || 0) + 1; });
+flt.innerHTML = ['Все'].concat(M.cats.filter(function (c) { return CN[c] > 1; })).map(function (c, i) {
   return '<button type="button" aria-pressed="' + (i ? 'false' : 'true') + '" data-c="' + esc(c) + '">' + esc(c) + '</button>';
 }).join('');
+/* r1 В5: каталог порциями — 16 вещей + «Показать ещё» (весь каталог доступен, страница не 19 000 px) */
+var PAGE = 16, shown = PAGE, curC = 'Все', more = $('#more'), mb = $('#mb'), mc = $('#mc');
+function applyGrid() {
+  var n = 0;
+  [].forEach.call(grid.children, function (x) {
+    var ok = curC === 'Все' || x.getAttribute('data-cat') === curC;
+    x.hidden = !ok || n >= shown; if (ok) n++;
+  });
+  var left = n - Math.min(n, shown);
+  more.hidden = left <= 0;
+  mc.textContent = 'Показано ' + Math.min(n, shown) + ' из ' + n;
+}
+applyGrid();
+mb.addEventListener('click', function () {
+  var first = shown; shown += 24; applyGrid();
+  var vis = [].filter.call(grid.children, function (x) { return !x.hidden; });
+  if (vis[first]) vis[first].focus({ preventScroll: true });
+});
 flt.addEventListener('click', function (e) {
   var b = e.target.closest('button'); if (!b) return;
   var c = b.getAttribute('data-c');
   [].forEach.call(flt.children, function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
-  [].forEach.call(grid.children, function (x) { x.hidden = !(c === 'Все' || x.getAttribute('data-cat') === c); });
+  curC = c; shown = PAGE; applyGrid();
   var top = $('#catalog .flt').getBoundingClientRect().top;
   if (top < hd.offsetHeight + 1) scrollTo({ top: scrollY + ($('#grid').getBoundingClientRect().top - hd.offsetHeight - flt.offsetHeight - 6), behavior: RM ? 'auto' : 'smooth' });
   b.scrollIntoView({ block: 'nearest', inline: 'center', behavior: RM ? 'auto' : 'smooth' });
@@ -205,6 +227,27 @@ function openItem(id) {
   itsc.scrollTop = 0;
   show($('#item'));
 }
+/* r1 Б1: «Размер» + ряд + подсказка всегда целиком выше панели .buy (запас 16 px).
+   Расчётный мгновенный скролл ближайшей прокрутки (телефон — .sc, десктоп — .inf),
+   повтор на следующем кадре и после доезда шторки — чтобы не зависеть от анимаций. */
+function scroller(el) {
+  for (var n = el.parentElement; n && n !== itsc.parentElement; n = n.parentElement) {
+    var o = getComputedStyle(n).overflowY;
+    if ((o === 'auto' || o === 'scroll') && n.scrollHeight > n.clientHeight + 1) return n;
+  }
+  return itsc;
+}
+function revealSizes() {
+  var fit = function () {
+    var box = $('#szs'), h = $('#hint'), l = $('#szl'); if (!box || !h) return;
+    var sc = scroller(box), r = sc.getBoundingClientRect(), buy = add.parentElement;
+    var lim = Math.min(r.bottom, buy ? buy.getBoundingClientRect().top : r.bottom) - 16;
+    var top = (l || box).getBoundingClientRect().top, bot = h.getBoundingClientRect().bottom;
+    if (bot > lim) sc.scrollTop += Math.ceil(bot - lim);
+    else if (top < r.top + 16) sc.scrollTop -= Math.ceil(r.top + 16 - top);
+  };
+  fit(); requestAnimationFrame(fit); setTimeout(fit, 300); setTimeout(fit, 700);
+}
 function inCart(p, s) { return cart.some(function (c) { return c.id === p.id && c.s === s; }); }
 var addT = 0;
 function setAdd() {
@@ -217,7 +260,7 @@ add.addEventListener('click', function () {
   if (p.sizes && p.sizes.length && !pick) {
     /* r3 В6: причину видно всегда — ряд размеров в центр шторки + текст на самой кнопке */
     var box = $('#szs'); box.classList.add('bad'); $('#hint').textContent = 'Выбери размер';
-    box.scrollIntoView({ block: 'center', behavior: RM ? 'auto' : 'smooth' });
+    revealSizes();
     if (box.animate && !RM) box.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-6px)' }, { transform: 'translateX(6px)' }, { transform: 'translateX(0)' }], { duration: 260 });
     clearTimeout(addT); add.textContent = 'Сначала выбери размер';
     addT = setTimeout(setAdd, 1500);
