@@ -168,12 +168,13 @@
     ' return d;}',
     'void main(){vec2 p=v*S;float c=texture2D(M,v).r;float d=fld(p);',
     ' float a=max(c,clamp(.5-d/1.6,0.,1.));if(a<.004){gl_FragColor=vec4(0.);return;}',
-    ' vec2 g=vec2(fld(p+vec2(1.,0.))-d,fld(p+vec2(0.,1.))-d);',
-    ' float t=clamp(-d/RIM,0.,1.),q=1.-t,sl=clamp(q/max(sqrt(1.-q*q),.12),0.,5.);',
+    /* r1b В6: центральная разность через 1,5 px и наклон ≤3 — на кромке не было «пунктира» из блёсток (шум 16-битной SDF ×5) */
+    ' vec2 g=vec2(fld(p+vec2(1.5,0.))-fld(p-vec2(1.5,0.)),fld(p+vec2(0.,1.5))-fld(p-vec2(0.,1.5)))/3.;',
+    ' float t=clamp(-d/RIM,0.,1.),q=1.-t,sl=clamp(q/max(sqrt(1.-q*q),.2),0.,3.);',
     ' vec3 n=normalize(vec3(g*sl,1.));vec3 L=normalize(vec3(-.55,-.8,1.));vec3 H=normalize(L+vec3(0.,0.,1.));',
     ' float dif=dot(n,L),sh=1.+.62*(dif-L.z);float sp=max(pow(max(dot(n,H),0.),36.)-pow(H.z,36.),0.);',
     ' float occ=smoothstep(0.,1.,t);',
-    ' vec3 col=C*clamp(sh,.42,1.06)*(.9+.1*occ)+vec3(sp*1.15);',
+    ' vec3 col=C*clamp(sh,.42,1.06)*(.9+.1*occ)+vec3(sp*1.15*smoothstep(.03,.28,t));',
     ' a*=1.-smoothstep(FADE,S.y,p.y);',
     ' gl_FragColor=vec4(min(col,vec3(1.))*a,a);}'
   ].join('\n');

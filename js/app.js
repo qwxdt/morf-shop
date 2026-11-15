@@ -21,7 +21,7 @@ function lock(on) { locks = Math.max(0, locks + (on ? 1 : -1)); H.classList.togg
    кромка догоняет и заливает экран. Пункты открываются ровно там, где уже есть краска (clip по кромке).
    Закрытие — краска втягивается вверх быстрее. Шапка выше меню, бургер всегда на месте. */
 var bg = $('#bg'), menu = $('#menu'), mcv = $('#mcv'), mlist = $('#mlist'), mctx = mcv.getContext('2d');
-var mT = 0, mDir = 0, mRaf = 0, mLast = 0, mDr = null, mW = 0, mH = 0, mDpr = 1, OPEN_MS = 900, CLOSE_MS = 560;
+var mT = 0, mDir = 0, mRaf = 0, mDr = null, mW = 0, mH = 0, mDpr = 1, OPEN_MS = 900, CLOSE_MS = 420;
 function mSeed(w, h) {
   var sd = 7, r = function () { sd = sd * 16807 % 2147483647; return (sd - 1) / 2147483646; };
   var f = Math.min(1.35, Math.max(.9, w / 390)), a = [], x = 10 + r() * 14;
@@ -63,12 +63,20 @@ function mSize() {
   if (w === mW && h === mH && dp === mDpr && mDr) return;
   mW = w; mH = h; mDpr = dp; mcv.width = Math.round(w * dp); mcv.height = Math.round(h * dp); mDr = mSeed(w, h);
 }
+function mNow() { return W8.performance && performance.now ? performance.now() : Date.now(); }
+var mS = 0, mT0 = 0, mEnd = 0;
+/* r1b В3: время по реальным часам, а не по сумме кадров — в WebKit кадры тяжёлые, и закрытие растягивалось до 1,6 с.
+   Сколько бы кадров ни успело отрисоваться, краска уходит за CLOSE_MS; страховка таймером, если rAF притормозит. */
 function mTick(now) {
-  var dt = Math.min(48, now - (mLast || now)); mLast = now;
-  mT = Math.max(0, Math.min(1, mT + mDir * dt / (mDir > 0 ? OPEN_MS : CLOSE_MS)));
+  var dur = mDir > 0 ? OPEN_MS : CLOSE_MS, el = Math.max(0, mNow() - mS);
+  mT = Math.max(0, Math.min(1, mT0 + mDir * el / dur));
   mDraw(mT);
   if ((mDir > 0 && mT < 1) || (mDir < 0 && mT > 0)) { mRaf = requestAnimationFrame(mTick); return; }
-  mRaf = 0; if (mDir < 0) menu.classList.remove('open', 'cl');
+  mStop();
+}
+function mStop() {
+  if (mRaf) cancelAnimationFrame(mRaf); mRaf = 0; clearTimeout(mEnd);
+  if (mDir < 0) { mT = 0; mDraw(0); menu.classList.remove('open', 'cl'); }
 }
 function setMenu(o) {
   var was = menu.classList.contains('open') && !menu.classList.contains('cl'); if (o === was) return;
@@ -79,9 +87,11 @@ function setMenu(o) {
   menu.classList.toggle('in', o);
   mSize();
   if (RM) { mT = o ? 1 : 0; mDraw(mT); if (!o) menu.classList.remove('open', 'cl'); return; }
-  mDir = o ? 1 : -1; mLast = 0;
+  mDir = o ? 1 : -1; mS = mNow(); mT0 = mT; clearTimeout(mEnd);
+  if (!o) mEnd = setTimeout(mStop, CLOSE_MS * mT0 + 120);
   if (!mRaf) mRaf = requestAnimationFrame(mTick);
 }
+
 W8.__menuAt = function (t) { mDir = 0; mSize(); mT = t; mDraw(t); }; /* для QA-кадров */
 addEventListener('resize', function () {
   if (!menu.classList.contains('open')) return;
@@ -97,12 +107,17 @@ menu.addEventListener('click', function (e) {
 /* ================= каталог ================= */
 var grid = $('#grid'), flt = $('#flt');
 function card(p) {
-  /* r1 В4: тёмная плитка для серебра в футляре (bg dark), bl-* — срез кадра к краю (CSS ещё не дописан); В6: в сетке превью 600 px */
-  var cls = 'ph' + (p.kind === 'cut' ? ' cut' : '') + (p.bg === 'dark' ? ' dk' : '') + (p.bl ? ' bl-' + p.bl : '');
+  /* r1 В4: тёмная плитка (bg dark); В6: в сетке превью 600 px */
+  /* r1b В2: bl = стороны, где вещь срезана кадром поста (t/b/l/r) — эти стороны вплотную к краю плитки */
+  var bl = p.kind === 'cut' && p.bl || '', has = function (c) { return bl.indexOf(c) >= 0; };
+  var cls = 'ph' + (p.kind === 'cut' ? ' cut' : '') + (p.bg === 'dark' ? ' dk' : '') + bl.split('').map(function (c) { return ' b-' + c; }).join('');
+  var op = bl ? ' style="object-position:' + (has('l') && !has('r') ? '0' : has('r') && !has('l') ? '100%' : '50%') + ' ' + (has('t') && !has('b') ? '0' : has('b') && !has('t') ? '100%' : '50%') + '"' : '';
   var t = p.t || [p.img, p.w, p.h];
   return '<button class="card" type="button" data-id="' + esc(p.id) + '" data-cat="' + esc(p.cat) + '">' +
     '<span class="' + cls + '"' + (p.bg === 'dark' ? ' style="background:#141414"' : '') + '>' +
-    '<img src="' + t[0] + '" width="' + t[1] + '" height="' + t[2] + '" loading="lazy" decoding="async" alt="' + esc(p.name) + '"></span>' +
+    /* r1b В1: srcset 600/900 — на телефоне с DPR 3 берётся 900, превью не растягивается в мыло */
+    '<img src="' + t[0] + '"' + (p.t && p.w > t[1] ? ' srcset="' + t[0] + ' ' + t[1] + 'w, ' + p.img + ' ' + p.w + 'w" sizes="(min-width:1312px) 308px, (min-width:1024px) 24vw, 47vw"' : '') +
+    ' width="' + t[1] + '" height="' + t[2] + '"' + op + ' loading="lazy" decoding="async" alt="' + esc(p.name) + '"></span>' +
     '<span class="nm">' + esc(p.name) + '</span><span class="pr">' + price(p.uah) + '</span>' +
     (p.sizes && p.sizes.length ? '<span class="sz">' + szs(p.sizes) + '</span>' : '') +
     /* r3 Б5: без плашки на фото; если архив включат (MORF_ASK=1) — обычным текстом под ценой */
@@ -115,7 +130,7 @@ flt.innerHTML = ['Все'].concat(M.cats.filter(function (c) { return CN[c] > 1;
   return '<button type="button" aria-pressed="' + (i ? 'false' : 'true') + '" data-c="' + esc(c) + '">' + esc(c) + '</button>';
 }).join('');
 /* r1 В5: каталог порциями — 16 вещей + «Показать ещё» (весь каталог доступен, страница не 19 000 px) */
-var PAGE = 16, shown = PAGE, curC = 'Все', more = $('#more'), mb = $('#mb'), mc = $('#mc');
+var PAGE = 16, shown = PAGE, curC = 'Все', more = $('#more'), mb = $('#mb');
 function applyGrid() {
   var n = 0;
   [].forEach.call(grid.children, function (x) {
@@ -123,8 +138,7 @@ function applyGrid() {
     x.hidden = !ok || n >= shown; if (ok) n++;
   });
   var left = n - Math.min(n, shown);
-  more.hidden = left <= 0;
-  mc.textContent = 'Показано ' + Math.min(n, shown) + ' из ' + n;
+  more.hidden = left <= 0; /* r1b Б2: без счётчика «Показано N из M» — только кнопка */
 }
 applyGrid();
 mb.addEventListener('click', function () {
@@ -185,7 +199,7 @@ function openItem(id) {
   itsc.innerHTML =
     '<div class="gal"><div class="gs" id="gs">' + g.map(function (x, k) {
       /* r3 Б2: маленькие исходники не растягивать больше натурального размера */
-      return '<figure><img' + cutCls + ' style="max-width:' + x[1] + 'px;max-height:' + x[2] + 'px" src="' + x[0] + '" width="' + x[1] + '" height="' + x[2] + '" ' + (k ? 'loading="lazy" ' : '') + 'decoding="async" alt="' + esc(p.name) + (g.length > 1 ? ', фото ' + (k + 1) + ' из ' + g.length : '') + '"></figure>';
+      return '<figure' + (x[3] ? ' class="dk"' : '') + '><img' + cutCls + ' style="max-width:' + x[1] + 'px;max-height:' + x[2] + 'px" src="' + x[0] + '" width="' + x[1] + '" height="' + x[2] + '" ' + (k ? 'loading="lazy" ' : '') + 'decoding="async" alt="' + esc(p.name) + (g.length > 1 ? ', фото ' + (k + 1) + ' из ' + g.length : '') + '"></figure>';
     }).join('') + '</div>' +
     (g.length > 1 ? '<div class="dots" aria-hidden="true">' + g.map(function (x, k) { return '<i' + (k ? '' : ' class="on"') + '></i>'; }).join('') + '</div>' +
       '<button class="ga l" type="button" aria-label="Предыдущее фото"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>' +
@@ -200,8 +214,9 @@ function openItem(id) {
       : '') +
     (p.st === 'ask'
       ? '<p class="st ask">Вещь из старого поста — наличие уточнит @' + M.tg + '</p>'
-      : '<p class="st">В наличии · доставка 1–3 дня</p>') +
-    '<p class="note">Нужен другой размер или другая вещь? Поможем с размером, а почти любую шмотку привезём под заказ — предоплата 50% или полная. Пиши <a href="' + TG + '" target="_blank" rel="noopener">@' + M.tg + '</a>.</p>' +
+      : '<p class="st">В наличии</p>') +
+    /* r1b В5: «доставка 1–3 дня» — в подзаголовке каталога, «под заказ / предоплата» — в футере; тут без повторов */
+    '<p class="note">Нужен другой размер? Пиши <a href="' + TG + '" target="_blank" rel="noopener">@' + M.tg + '</a>.</p>' +
     (p.post ? '<p class="note"><a href="https://t.me/' + M.channel + '/' + p.post + '" target="_blank" rel="noopener">Пост с этой вещью в канале</a></p>' : '') +
     '</div>';
   setAdd();
@@ -430,6 +445,9 @@ function run(a, b, dur, done, mid) {
   requestAnimationFrame(step);
 }
 function label() { cv.setAttribute('aria-label', P[at].name); }
+/* r1b М3: следующий кадр морфа грузим, только когда показан текущий — первый экран не тянет все зипки сразу */
+var pend = {};
+function pre(j) { j %= P.length; if (imgs[j] || pend[j]) return; pend[j] = 1; load(P[j].img).then(function (im) { imgs[j] = im; }); }
 setCap(P[1]);
 var EVERY = 3900, HOLD = 6900, tm = 0, seen = true, live = false, hero = $('.hero');
 /* r3 М8: лоадер уходит, когда шрифт вордмарка уже готов — MORF не меняет ширину после лоадера (WebKit) */
@@ -439,8 +457,7 @@ function fontReady() {
 }
 Promise.all([load(P[0].img), load(P[1].img), fontReady()]).then(function (r) {
   imgs[0] = r[0]; imgs[1] = r[1]; size();
-  P.slice(2).forEach(function (p, i) { load(p.img).then(function (im) { imgs[i + 2] = im; }); });
-  function end() { at = 1; busy = false; label(); finish(); live = true; arm(); }
+  function end() { at = 1; busy = false; label(); finish(); live = true; pre(2); arm(); }
   if (RM) { paint(0, 1, 1); end(); return; }
   paint(0, 1, 0);
   setTimeout(function () { run(0, 1, left(1000, 550, 1450), end); }, 60);
@@ -451,10 +468,12 @@ function arm() { if (tm || busy || !can()) return; tm = setTimeout(next, P[at].n
 function disarm() { clearTimeout(tm); tm = 0; }
 function next() {
   tm = 0; if (busy || !can()) { arm(); return; } var n = -1;
-  for (var k = 1; k < P.length; k++) { var j = (at + k) % P.length; if (imgs[j] && imgs[j].naturalWidth) { n = j; break; } }
+  for (var k = 1; k < P.length; k++) { /* битый кадр пропускаем, недогруженный — ждём */
+    var j = (at + k) % P.length; if (!imgs[j]) { pre(j); break; } if (imgs[j].naturalWidth) { n = j; break; }
+  }
   if (n < 0) { arm(); return; }
   busy = true; cap.classList.add('sw');
-  run(at, n, 1100, function () { at = n; busy = false; label(); arm(); }, function () { setCap(P[n]); cap.classList.remove('sw'); });
+  run(at, n, 1100, function () { at = n; busy = false; label(); pre(n + 1); arm(); }, function () { setCap(P[n]); cap.classList.remove('sw'); });
 }
 if ('IntersectionObserver' in W8) new IntersectionObserver(function (e) { seen = e[e.length - 1].isIntersecting; seen ? arm() : disarm(); }, { threshold: .2 }).observe(hero);
 D.addEventListener('visibilitychange', function () { D.hidden ? disarm() : arm(); });
